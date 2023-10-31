@@ -5,7 +5,7 @@ import os
 import traceback
 
 from ...tools import instrument_definition
-from ..utils import Monitor
+from ..utils import Monitor, MonitorProc
 from .common import NotAvailable
 
 
@@ -129,6 +129,22 @@ def _visible_devices(smi):
     return ours
 
 
+def _monitor_fn():
+    data = {
+        gpu["device"]: {
+            "memory": [
+                gpu["memory"]["used"],
+                gpu["memory"]["total"],
+            ],
+            "load": gpu["utilization"]["compute"],
+            "temperature": gpu["temperature"],
+            "power": gpu["power"]
+        }
+        for gpu in get_gpu_info()["gpus"].values()
+    }
+    return {"task": "main", "gpudata": data, "t": time.time()}
+
+
 @instrument_definition
 def gpu_monitor(ov, poll_interval=10, arch=None):
     """Monitor GPU utilization.
@@ -164,19 +180,7 @@ def gpu_monitor(ov, poll_interval=10, arch=None):
     smi = select_backend(arch)
 
     def monitor():
-        data = {
-            gpu["device"]: {
-                "memory": [
-                    gpu["memory"]["used"],
-                    gpu["memory"]["total"],
-                ],
-                "load": gpu["utilization"]["compute"],
-                "temperature": gpu["temperature"],
-                "power": gpu["power"],
-            }
-            for gpu in smi.get_gpus_info(_visible_devices(smi)).values()
-        }
-        ov.give(task="main", gpudata=data)
+        ov.give(task="main", gpudata=_monitor_fn())
 
     monitor_thread = Monitor(poll_interval, monitor)
     monitor_thread.start()
@@ -185,3 +189,14 @@ def gpu_monitor(ov, poll_interval=10, arch=None):
     finally:
         monitor_thread.stop()
         monitor()
+
+
+class GPUMonitor:
+    def __init__(self, delay, fun) -> None:
+        self.monitor = MonitorProc(delay, _monitor_fn, fun)
+
+    def start(self):
+        self.monitor.start()
+
+    def stop(self):
+        self.monitor.stop()
