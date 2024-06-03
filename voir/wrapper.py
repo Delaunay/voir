@@ -2,6 +2,8 @@ import json
 import os
 import sys
 import time
+import contextvars
+from contextlib import contextmanager
 
 from .helpers import current_overseer
 from .phase import StopProgram
@@ -62,7 +64,7 @@ def earlystop_count():
     )
 
 
-class DataloaderWrapper:
+class DeviceTimedIterator:
     """Time the body of a loop, ignoring the time it took to initialize the iterator.`
     The timings are measured using `torch.cuda.Event` to avoid explicit sync.
 
@@ -157,6 +159,7 @@ class DataloaderWrapper:
         self.raise_stop_program = raise_stop_program
         self.break_count = 0
         self.batch_size_fn = batch_size_fn
+        self.on_iter_end = lambda : None
 
         if not TORCH_ERROR and dist.is_initialized():
             self.rank = rank
@@ -250,6 +253,8 @@ class DataloaderWrapper:
         event.record()
         event.synchronize()
 
+        self.on_iter_end()
+
         s = -time.time()
         self.extra_work()
 
@@ -302,8 +307,12 @@ class DataloaderWrapper:
             self.message_push(**kwargs)
 
 
-class Wrapper:
-    """Helper class to create override function for ptera
+
+
+class LazyTracker:
+    """Helper class to create override function for ptera.
+    Add extension hooks to critterion and optimizer steps so device specific logic
+    can be added there.
 
     Examples
     --------
@@ -330,11 +339,12 @@ class Wrapper:
 
     def loader(self, loader):
         """Wrap a dataloader or an iterable which enable accurate measuring of time spent in the loop's body"""
-        ctor = DataloaderWrapper.with_give
+        ctor = DeviceTimedIterator.with_give
         if self.stdout:
-            ctor = DataloaderWrapper.with_sumggler
+            ctor = DeviceTimedIterator.with_sumggler
 
         self.wrapped = ctor(loader, *self.args, **self.kwargs)
+        self.wrapped.on_iter_end = self.on_iter_end
         return self.wrapped
 
     def criterion(self, criterion):
@@ -368,3 +378,51 @@ class Wrapper:
 
             optimizer.step = new_step
         return optimizer
+
+    def on_iter_end(self):
+        """Called when `DeviceTimedIterator` finishes iterating.
+        Used to push gathered metrics.
+
+        """
+
+    def record_loss(self, loss):
+        self.wrapped.add_loss(loss)
+
+lazy_tracker = contextvars.ContextVar("LazyTracker", default=LazyTracker())
+
+
+@contextmanager
+def new_tracker(*args, **kwargs):
+    w = Wrapper(*args, **kwargs)
+
+    prev = lazy_tracker.set(w)
+
+    yield w
+
+    lazy_tracker.reset(prev)
+
+
+def get_lazy_tracker() -> LazyTracker:
+    return lazy_tracker.get()
+
+
+def wrap_iterator(loss) -> DeviceTimedIterator:
+    wrapper = get_lazy_tracker()
+    return wrapper.loader(loss)
+
+
+def record_loss(loss):
+    wrapper = get_lazy_tracker()
+    wrapper.record_loss(loss)
+
+
+def set_batch_size_fn(batch_size_fn):
+    wrapper = get_lazy_tracker()
+    wrapper.wrapped.batch_size_fn = batch_size_fn
+
+
+#
+# Legacy Names
+#
+Wrapper = LazyTracker
+DataloaderWrapper = DeviceTimedIterator
