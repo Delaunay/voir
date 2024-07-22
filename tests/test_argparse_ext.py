@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import pytest
 
@@ -35,7 +35,7 @@ class Configuration:
     greeting: str = "hello"
     """The greeting to use!"""
 
-    scone: Muffin = Muffin()
+    scone: Muffin = field(default_fatory=Muffin())
 
 
 @pytest.fixture
