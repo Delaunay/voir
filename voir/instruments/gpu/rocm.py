@@ -139,7 +139,7 @@ def get_temp(device, sensor):
     )
     if rsmi_ret_ok(ret, device, sensor, True):
         return temp.value / 1000
-    return "N/A"
+    return -1
 
 
 def get_power(device):
@@ -151,7 +151,7 @@ def get_power(device):
     ret = rsmi.rocmsmi.rsmi_dev_power_ave_get(device, 0, rsmi.byref(power))
     if rsmi_ret_ok(ret, device, "power"):
         return power.value / 1000000
-    return "N/A"
+    return -1
 
 
 def get_product_name(device):
