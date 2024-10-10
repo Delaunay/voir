@@ -1,7 +1,10 @@
+from contextlib import contextmanager
 import os
 import traceback
 
+
 from .common import NotAvailable
+
 
 IMPORT_ERROR = None
 try:
@@ -101,9 +104,18 @@ def make_gpu_info(gid, handle, selection):
         ),
         "power": fix_num(safecall(pyhlml.hlmlDeviceGetPowerUsage, handle)) / 1000.0,
         "selection_variable": "HABANA_VISIBLE_MODULES",
-        "driver": pyhlml.hlmlGetDriverVersion(),
     }
 
+
+@contextmanager
+def hlmlinit():
+    try:
+        pyhlml.hlmlInit()
+        yield
+        pyhlml.hlmlShutdown()
+    except pyhlml.hlml_error.HLMLError_AlreadyInitialized:
+        pass
+    
 
 class DeviceSMI:
     def _setup(self):
@@ -111,17 +123,11 @@ class DeviceSMI:
 
         if IMPORT_ERROR is not None:
             raise IMPORT_ERROR
-        try:
-            pyhlml.hlmlInit()
-        except pyhlml.hlml_error.HLMLError_AlreadyInitialized:
-            pass
-        except pyhlml.hlml_error as err:
-            raise NotAvailable() from err
 
-        deviceCount = pyhlml.hlmlDeviceGetCount()
-
-        for i in range(0, deviceCount):
-            self.handles[i] = pyhlml.hlmlDeviceGetHandleByIndex(i)
+        with hlmlinit():
+            deviceCount = pyhlml.hlmlDeviceGetCount()
+            for i in range(0, deviceCount):
+                self.handles[i] = pyhlml.hlmlDeviceGetHandleByIndex(i)
 
     def __init__(self) -> None:
         self.hlsmi = None
@@ -136,7 +142,8 @@ class DeviceSMI:
         return os.environ.get("HABANA_VISIBLE_MODULES", None)
 
     def get_gpus_info(self, selection=None):
-        return make_gpu_infos(self.handles, selection)
+        with hlmlinit():
+            return make_gpu_infos(self.handles, selection)
 
     def close(self):
         pass
